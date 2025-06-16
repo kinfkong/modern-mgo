@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	mongodrv "go.mongodb.org/mongo-driver/mongo"
+
 	"github.com/globalsign/mgo/bson"
 )
 
@@ -260,4 +262,73 @@ func wrapInSetOperator(doc interface{}) interface{} {
 		return doc
 	}
 	return bson.M{"$set": doc}
+}
+
+// -------------------------- Duplicate key detection --------------------------
+
+// isDupCode reports whether the provided MongoDB error code corresponds to a
+// duplicate-key violation. These magic numbers originate from the upstream
+// mgo implementation and MongoDB server error codes.
+func isDupCode(code int) bool {
+	return code == 11000 || code == 11001 || code == 12582 || code == 16460
+}
+
+// IsDup returns true if the supplied error represents a duplicate key error
+// (attempt to insert or upsert a document that violates a unique index).
+//
+// The original mgo implementation inspects several custom error wrappers. In
+// the modern wrapper we additionally recognise the official driver error
+// types so client code can rely on this helper for both worlds.
+func IsDup(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	switch e := err.(type) {
+	case *BulkError:
+		// A BulkError is considered duplicate only if *all* individual cases are
+		// duplicate-key errors, mirroring the behaviour of the legacy driver.
+		for _, c := range e.Cases() {
+			if !IsDup(c.Err) {
+				return false
+			}
+		}
+		return len(e.Cases()) > 0
+	case *QueryError:
+		return isDupCode(e.Code)
+	}
+
+	// Handle official MongoDB driver error varieties.
+	// NOTE: These assertions use the mongo package types via the local alias
+	// "mongodrv" which is already imported elsewhere in the project.
+	if we, ok := err.(mongodrv.WriteException); ok {
+		if we.WriteConcernError != nil && isDupCode(int(we.WriteConcernError.Code)) {
+			return true
+		}
+		if len(we.WriteErrors) == 0 {
+			return false
+		}
+		for _, w := range we.WriteErrors {
+			if !isDupCode(int(w.Code)) {
+				return false
+			}
+		}
+		return true
+	}
+	if bwe, ok := err.(mongodrv.BulkWriteException); ok {
+		if bwe.WriteConcernError != nil && isDupCode(int(bwe.WriteConcernError.Code)) {
+			return true
+		}
+		if len(bwe.WriteErrors) == 0 {
+			return false
+		}
+		for _, w := range bwe.WriteErrors {
+			if !isDupCode(int(w.Code)) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
 }

@@ -20,3 +20,5 @@ type Session = ModernMGO
 func Dial(mongoURL string) (*Session, error) {
 	return DialModernMGO(mongoURL)
 }
+
+type Collection = ModernColl
