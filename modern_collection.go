@@ -317,3 +317,8 @@ func (c *ModernColl) UpdateAll(selector, update interface{}) (*ChangeInfo, error
 
 	return changeInfo, nil
 }
+
+// UpsertId updates a document by its _id or inserts it if it doesn't exist (mgo API compatible)
+func (c *ModernColl) UpsertId(id interface{}, update interface{}) (*ChangeInfo, error) {
+	return c.Upsert(bson.M{"_id": id}, update)
+}
