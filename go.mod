@@ -1,4 +1,4 @@
-module github.com/kinfkong/modern-mgo
+module github.com/globalsign/mgo
 
 go 1.21
 

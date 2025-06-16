@@ -1,7 +1,7 @@
 package bson_test
 
 import (
-	"github.com/kinfkong/modern-mgo/bson"
+	"github.com/globalsign/mgo/bson"
 	. "gopkg.in/check.v1"
 )
 

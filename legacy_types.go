@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kinfkong/modern-mgo/bson"
+	"github.com/globalsign/mgo/bson"
 )
 
 // Mode specifies the replica-set read preference mode (compatibility with mgo).

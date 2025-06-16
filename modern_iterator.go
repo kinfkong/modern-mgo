@@ -3,7 +3,7 @@
 package mgo
 
 import (
-	"github.com/kinfkong/modern-mgo/bson"
+	"github.com/globalsign/mgo/bson"
 	officialBson "go.mongodb.org/mongo-driver/bson"
 )
 

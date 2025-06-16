@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kinfkong/modern-mgo/bson"
+	"github.com/globalsign/mgo/bson"
 	officialBson "go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"

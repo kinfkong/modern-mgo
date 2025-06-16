@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/kinfkong/modern-mgo/bson"
+	"github.com/globalsign/mgo/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
