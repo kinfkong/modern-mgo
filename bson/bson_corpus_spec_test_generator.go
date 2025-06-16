@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -12,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kinfkong/modern-mgo/internal/json"
+	"github.com/kinfkong/modern-mgo/json"
 )
 
 func main() {
