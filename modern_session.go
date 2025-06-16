@@ -184,6 +184,14 @@ func (db *ModernDB) Run(cmd interface{}, result interface{}) error {
 	return db.mgoDB.RunCommand(ctx, command).Decode(result)
 }
 
+// DropDatabase removes the entire database including all of its collections (mgo API compatible)
+func (db *ModernDB) DropDatabase() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return db.mgoDB.Drop(ctx)
+}
+
 // Run executes a database command (mgo API compatible with 3-parameter interface)
 func (m *ModernMGO) Run(adminFlag interface{}, cmd interface{}, result interface{}) error {
 	// First parameter determines which database to use

@@ -4,6 +4,7 @@ package mgo
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -25,7 +26,10 @@ func (c *ModernColl) Insert(docs ...interface{}) error {
 		preparedDoc := ensureObjectId(doc)
 		convertedDocs[i] = convertMGOToOfficial(preparedDoc)
 	}
-
+	// print out the IDs of the documents
+	for _, doc := range convertedDocs {
+		fmt.Println(doc)
+	}
 	if len(convertedDocs) == 1 {
 		_, err := c.mgoColl.InsertOne(ctx, convertedDocs[0])
 		return err
@@ -304,7 +308,9 @@ func (c *ModernColl) UpdateAll(selector, update interface{}) (*ChangeInfo, error
 	// Wrap plain documents in $set operator for MongoDB compatibility
 	wrappedUpdate := wrapInSetOperator(update)
 	updateDoc := convertMGOToOfficial(wrappedUpdate)
-
+	// print out the filter and updateDoc
+	fmt.Println("filter", filter)
+	fmt.Println("updateDoc", updateDoc)
 	result, err := c.mgoColl.UpdateMany(ctx, filter, updateDoc)
 	if err != nil {
 		return nil, err
@@ -314,7 +320,7 @@ func (c *ModernColl) UpdateAll(selector, update interface{}) (*ChangeInfo, error
 		Updated: int(result.ModifiedCount),
 		Matched: int(result.MatchedCount),
 	}
-
+	fmt.Println("result", result)
 	return changeInfo, nil
 }
 
