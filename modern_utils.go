@@ -60,6 +60,18 @@ func convertMGOToOfficial(input interface{}) interface{} {
 			result[i] = convertMGOToOfficial(item)
 		}
 		return result
+	case []bson.ObjectId:
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			if len(item) == 12 {
+				objID := primitive.ObjectID{}
+				copy(objID[:], []byte(item))
+				result[i] = objID
+			} else {
+				result[i] = item
+			}
+		}
+		return result
 	case map[string]interface{}:
 		result := officialBson.M{}
 		for key, value := range v {
