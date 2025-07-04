@@ -5,6 +5,7 @@ package mgo
 import (
 	stdlog "log"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/globalsign/mgo/bson"
@@ -179,6 +180,16 @@ func convertSliceWithReflect(srcSlice []interface{}, dst interface{}) error {
 	newSlice := reflect.MakeSlice(dstSlice.Type(), 0, len(srcSlice))
 
 	for _, item := range srcSlice {
+		// Special handling for time.Time conversion from int64 timestamps
+		if elementType == reflect.TypeOf(time.Time{}) {
+			if timestamp, ok := item.(int64); ok {
+				// Convert milliseconds timestamp to time.Time
+				timeValue := time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC()
+				newSlice = reflect.Append(newSlice, reflect.ValueOf(timeValue))
+				continue
+			}
+		}
+
 		// Convert each item to the target element type
 		newElement := reflect.New(elementType).Interface()
 		err := mapStructToInterface(item, newElement)
@@ -203,12 +214,79 @@ func mapStructToInterface(src, dst interface{}) error {
 		return convertSliceWithReflect(srcSlice, dst)
 	}
 
+	// Handle bson.M conversion to struct - need to preprocess time fields
+	if srcMap, ok := src.(bson.M); ok {
+		// Get the destination struct type to check field types
+		dstValue := reflect.ValueOf(dst)
+		if dstValue.Kind() == reflect.Ptr && dstValue.Elem().Kind() == reflect.Struct {
+			dstType := dstValue.Elem().Type()
+
+			// Create a copy and preprocess any time slice fields
+			processedMap := bson.M{}
+			for key, value := range srcMap {
+				processedMap[key] = preprocessTimeSlicesForStruct(value, key, dstType)
+			}
+			src = processedMap
+		}
+	}
+
 	// Handle single document conversion
 	data, err := bson.Marshal(src)
 	if err != nil {
 		return err
 	}
 	return bson.Unmarshal(data, dst)
+}
+
+// preprocessTimeSlicesForStruct converts []interface{} containing int64 timestamps to []time.Time
+// only if the target struct field is expecting []time.Time
+func preprocessTimeSlicesForStruct(value interface{}, fieldName string, structType reflect.Type) interface{} {
+	if slice, ok := value.([]interface{}); ok && len(slice) > 0 {
+		// Find the field in the struct
+		field, found := findStructFieldByBSONTag(structType, fieldName)
+		if found && field.Type.Kind() == reflect.Slice && field.Type.Elem() == reflect.TypeOf(time.Time{}) {
+			// This field expects []time.Time, so try to convert int64 values
+			allInt64 := true
+			for _, item := range slice {
+				if _, ok := item.(int64); !ok {
+					allInt64 = false
+					break
+				}
+			}
+
+			if allInt64 {
+				// Convert int64 timestamps to time.Time values
+				timeSlice := make([]time.Time, len(slice))
+				for i, item := range slice {
+					if timestamp, ok := item.(int64); ok {
+						timeSlice[i] = time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC()
+					}
+				}
+				return timeSlice
+			}
+		}
+	}
+	return value
+}
+
+// findStructFieldByBSONTag finds a struct field by its BSON tag name
+func findStructFieldByBSONTag(structType reflect.Type, bsonFieldName string) (reflect.StructField, bool) {
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		bsonTag := field.Tag.Get("bson")
+
+		// Parse the bson tag (format: "fieldname" or "fieldname,omitempty")
+		tagParts := strings.Split(bsonTag, ",")
+		if len(tagParts) > 0 && tagParts[0] == bsonFieldName {
+			return field, true
+		}
+
+		// Also check if the field name matches (case-insensitive)
+		if strings.ToLower(field.Name) == strings.ToLower(bsonFieldName) {
+			return field, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // ensureObjectId ensures that a document has a proper _id field
