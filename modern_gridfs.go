@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdlog "log"
 	"time"
 
 	"github.com/globalsign/mgo/bson"
@@ -29,6 +30,9 @@ func (gfs *ModernGridFS) Create(filename string) (*ModernGridFile, error) {
 		gfs:         gfs,
 		chunks:      make([][]byte, 0),
 		closed:      false,
+		readPos:     0,
+		chunkIndex:  0,
+		chunkPos:    0,
 	}, nil
 }
 
@@ -50,8 +54,11 @@ func (gfs *ModernGridFS) Open(filename string) (*ModernGridFile, error) {
 	}
 
 	file := &ModernGridFile{
-		gfs:    gfs,
-		closed: false,
+		gfs:        gfs,
+		closed:     false,
+		readPos:    0,
+		chunkIndex: 0,
+		chunkPos:   0,
 	}
 
 	if id, ok := fileDoc["_id"]; ok {
@@ -102,8 +109,11 @@ func (gfs *ModernGridFS) OpenId(id interface{}) (*ModernGridFile, error) {
 	}
 
 	file := &ModernGridFile{
-		gfs:    gfs,
-		closed: false,
+		gfs:        gfs,
+		closed:     false,
+		readPos:    0,
+		chunkIndex: 0,
+		chunkPos:   0,
 	}
 
 	if id, ok := fileDoc["_id"]; ok {
@@ -202,8 +212,11 @@ func (gfs *ModernGridFS) OpenNext(iter *ModernIt, file **ModernGridFile) bool {
 	}
 
 	f := &ModernGridFile{
-		gfs:    gfs,
-		closed: false,
+		gfs:        gfs,
+		closed:     false,
+		readPos:    0,
+		chunkIndex: 0,
+		chunkPos:   0,
 	}
 
 	if id, ok := fileDoc["_id"]; ok {
@@ -247,9 +260,51 @@ func (f *ModernGridFile) Write(data []byte) (int, error) {
 		return 0, errors.New("file is closed")
 	}
 
-	f.chunks = append(f.chunks, data)
-	f.length += int64(len(data))
-	return len(data), nil
+	// Initialize chunks if needed
+	if f.chunks == nil {
+		f.chunks = make([][]byte, 0)
+		f.chunkIndex = 0
+		f.chunkPos = 0
+	}
+
+	totalWritten := 0
+	remainingData := data
+
+	for len(remainingData) > 0 {
+		// Create new chunk if needed
+		if f.chunkIndex >= len(f.chunks) {
+			f.chunks = append(f.chunks, make([]byte, 0, f.chunkSize))
+		}
+
+		currentChunk := f.chunks[f.chunkIndex]
+		spaceInChunk := f.chunkSize - len(currentChunk)
+
+		if spaceInChunk <= 0 {
+			// Current chunk is full, move to next
+			f.chunkIndex++
+			continue
+		}
+
+		// Write what we can to current chunk
+		toWrite := len(remainingData)
+		if toWrite > spaceInChunk {
+			toWrite = spaceInChunk
+		}
+
+		// Append to current chunk
+		f.chunks[f.chunkIndex] = append(currentChunk, remainingData[:toWrite]...)
+
+		totalWritten += toWrite
+		f.length += int64(toWrite)
+		remainingData = remainingData[toWrite:]
+
+		// If chunk is full, prepare for next
+		if len(f.chunks[f.chunkIndex]) >= f.chunkSize {
+			f.chunkIndex++
+		}
+	}
+
+	return totalWritten, nil
 }
 
 // Read reads data from the GridFS file (mgo API compatible)
@@ -258,9 +313,21 @@ func (f *ModernGridFile) Read(data []byte) (int, error) {
 		return 0, errors.New("file is closed")
 	}
 
+	// Debug logging
+	if DebugConversion {
+		stdlog.Printf("GridFS Read: readPos=%d, length=%d, chunkIndex=%d, chunks=%v",
+			f.readPos, f.length, f.chunkIndex, f.chunks != nil)
+	}
+
+	// Check if we've reached EOF
+	if f.readPos >= f.length {
+		return 0, io.EOF
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Load chunks from database if not already loaded
 	if f.chunks == nil {
 		filter := convertMGOToOfficial(bson.M{"files_id": f.id})
 		opts := options.Find().SetSort(officialBson.D{{Key: "n", Value: 1}})
@@ -284,7 +351,46 @@ func (f *ModernGridFile) Read(data []byte) (int, error) {
 				chunkData = dt
 			case primitive.Binary:
 				chunkData = dt.Data
+			case primitive.A:
+				// Handle array of bytes (primitive.A)
+				chunkData = make([]byte, len(dt))
+				for i, v := range dt {
+					if b, ok := v.(byte); ok {
+						chunkData[i] = b
+					} else if n, ok := v.(int32); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else if n, ok := v.(int64); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else if n, ok := v.(float64); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else {
+						if DebugConversion {
+							stdlog.Printf("GridFS Read: Unknown type in array at index %d: %T = %v", i, v, v)
+						}
+					}
+				}
+			case []interface{}:
+				// Handle slice of interfaces
+				chunkData = make([]byte, len(dt))
+				for i, v := range dt {
+					if b, ok := v.(byte); ok {
+						chunkData[i] = b
+					} else if n, ok := v.(int32); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else if n, ok := v.(int64); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else if n, ok := v.(float64); ok && n >= 0 && n <= 255 {
+						chunkData[i] = byte(n)
+					} else {
+						if DebugConversion {
+							stdlog.Printf("GridFS Read: Unknown type in slice at index %d: %T = %v", i, v, v)
+						}
+					}
+				}
 			default:
+				if DebugConversion {
+					stdlog.Printf("GridFS Read: Unknown data type in chunk: %T", chunkDoc["data"])
+				}
 				continue
 			}
 
@@ -292,21 +398,64 @@ func (f *ModernGridFile) Read(data []byte) (int, error) {
 				f.chunks = append(f.chunks, chunkData)
 			}
 		}
+
+		// Reset read position to beginning if loading fresh
+		f.chunkIndex = 0
+		f.chunkPos = 0
+		f.readPos = 0
+
+		if DebugConversion {
+			stdlog.Printf("GridFS Read: Loaded %d chunks from database", len(f.chunks))
+		}
 	}
 
 	totalRead := 0
-	for _, chunk := range f.chunks {
-		if totalRead >= len(data) {
-			break
+	remainingBytes := len(data)
+
+	// Read from current position
+	for f.chunkIndex < len(f.chunks) && remainingBytes > 0 {
+		currentChunk := f.chunks[f.chunkIndex]
+
+		// Calculate how many bytes we can read from current chunk
+		availableInChunk := len(currentChunk) - f.chunkPos
+		if availableInChunk <= 0 {
+			// Move to next chunk
+			f.chunkIndex++
+			f.chunkPos = 0
+			continue
 		}
-		n := copy(data[totalRead:], chunk)
-		totalRead += n
-		if n < len(chunk) {
+
+		// Read what we can from this chunk
+		toRead := availableInChunk
+		if toRead > remainingBytes {
+			toRead = remainingBytes
+		}
+
+		// Don't read past the file length
+		if f.readPos+int64(toRead) > f.length {
+			toRead = int(f.length - f.readPos)
+		}
+
+		copy(data[totalRead:totalRead+toRead], currentChunk[f.chunkPos:f.chunkPos+toRead])
+
+		totalRead += toRead
+		f.chunkPos += toRead
+		f.readPos += int64(toRead)
+		remainingBytes -= toRead
+
+		// If we've read the entire chunk, move to next
+		if f.chunkPos >= len(currentChunk) {
+			f.chunkIndex++
+			f.chunkPos = 0
+		}
+
+		// Stop if we've reached the file length
+		if f.readPos >= f.length {
 			break
 		}
 	}
 
-	if totalRead == 0 {
+	if totalRead == 0 && f.readPos >= f.length {
 		return 0, io.EOF
 	}
 

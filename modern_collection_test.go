@@ -825,10 +825,13 @@ func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
 	// Verify basic fields
 	retrievedMainUserID, ok := retrievedDoc["userId"].(bson.ObjectId)
 	if !ok {
-		if idStr, ok := retrievedDoc["userId"].(string); ok {
+		// Check if it's a byte array ([]uint8)
+		if idBytes, ok := retrievedDoc["userId"].([]byte); ok && len(idBytes) == 12 {
+			retrievedMainUserID = bson.ObjectId(idBytes)
+		} else if idStr, ok := retrievedDoc["userId"].(string); ok {
 			retrievedMainUserID = bson.ObjectId(idStr)
 		} else {
-			t.Fatalf("Expected main userId to be bson.ObjectId or string, got %T", retrievedDoc["userId"])
+			t.Fatalf("Expected main userId to be bson.ObjectId, []byte, or string, got %T", retrievedDoc["userId"])
 		}
 	}
 	AssertEqual(t, userID.Hex(), retrievedMainUserID.Hex(), "UserId mismatch")
@@ -860,11 +863,13 @@ func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
 	// Convert the retrieved userId to bson.ObjectId for comparison
 	retrievedUserID, ok := device1["userId"].(bson.ObjectId)
 	if !ok {
-		// If it's not already a bson.ObjectId, it might be a string - convert it
-		if userIDStr, ok := device1["userId"].(string); ok {
+		// Check if it's a byte array ([]uint8)
+		if idBytes, ok := device1["userId"].([]byte); ok && len(idBytes) == 12 {
+			retrievedUserID = bson.ObjectId(idBytes)
+		} else if userIDStr, ok := device1["userId"].(string); ok {
 			retrievedUserID = bson.ObjectId(userIDStr)
 		} else {
-			t.Fatalf("Expected userId to be bson.ObjectId or string, got %T", device1["userId"])
+			t.Fatalf("Expected userId to be bson.ObjectId, []byte, or string, got %T", device1["userId"])
 		}
 	}
 	AssertEqual(t, userID.Hex(), retrievedUserID.Hex(), "Device userId mismatch")
@@ -887,10 +892,12 @@ func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
 	// Convert the retrieved userId to bson.ObjectId for comparison
 	retrievedFamilyUserID, ok := family1["userId"].(bson.ObjectId)
 	if !ok {
-		if userIDStr, ok := family1["userId"].(string); ok {
+		if idBytes, ok := family1["userId"].([]byte); ok && len(idBytes) == 12 {
+			retrievedFamilyUserID = bson.ObjectId(idBytes)
+		} else if userIDStr, ok := family1["userId"].(string); ok {
 			retrievedFamilyUserID = bson.ObjectId(userIDStr)
 		} else {
-			t.Fatalf("Expected family userId to be bson.ObjectId or string, got %T", family1["userId"])
+			t.Fatalf("Expected family userId to be bson.ObjectId, []byte, or string, got %T", family1["userId"])
 		}
 	}
 	AssertEqual(t, userID.Hex(), retrievedFamilyUserID.Hex(), "Family userId mismatch")
@@ -919,10 +926,12 @@ func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
 	// Convert the retrieved _id to bson.ObjectId for comparison
 	retrievedAccountID, ok := account1["_id"].(bson.ObjectId)
 	if !ok {
-		if idStr, ok := account1["_id"].(string); ok {
+		if idBytes, ok := account1["_id"].([]byte); ok && len(idBytes) == 12 {
+			retrievedAccountID = bson.ObjectId(idBytes)
+		} else if idStr, ok := account1["_id"].(string); ok {
 			retrievedAccountID = bson.ObjectId(idStr)
 		} else {
-			t.Fatalf("Expected account _id to be bson.ObjectId or string, got %T", account1["_id"])
+			t.Fatalf("Expected account _id to be bson.ObjectId, []byte, or string, got %T", account1["_id"])
 		}
 	}
 	AssertEqual(t, userID.Hex(), retrievedAccountID.Hex(), "Account _id mismatch")
@@ -954,10 +963,12 @@ func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
 	// Convert the retrieved requestedBy to bson.ObjectId for comparison
 	retrievedRequestedBy, ok := retrievedExtraInfo["requestedBy"].(bson.ObjectId)
 	if !ok {
-		if idStr, ok := retrievedExtraInfo["requestedBy"].(string); ok {
+		if idBytes, ok := retrievedExtraInfo["requestedBy"].([]byte); ok && len(idBytes) == 12 {
+			retrievedRequestedBy = bson.ObjectId(idBytes)
+		} else if idStr, ok := retrievedExtraInfo["requestedBy"].(string); ok {
 			retrievedRequestedBy = bson.ObjectId(idStr)
 		} else {
-			t.Fatalf("Expected requestedBy to be bson.ObjectId or string, got %T", retrievedExtraInfo["requestedBy"])
+			t.Fatalf("Expected requestedBy to be bson.ObjectId, []byte, or string, got %T", retrievedExtraInfo["requestedBy"])
 		}
 	}
 	AssertEqual(t, userID.Hex(), retrievedRequestedBy.Hex(), "RequestedBy mismatch")

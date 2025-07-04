@@ -86,4 +86,8 @@ type ModernGridFile struct {
 	gfs         *ModernGridFS
 	chunks      [][]byte
 	closed      bool
+	// Read position tracking
+	readPos    int64 // Current position in the file
+	chunkIndex int   // Current chunk being read
+	chunkPos   int   // Position within current chunk
 }

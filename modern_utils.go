@@ -173,6 +173,12 @@ func convertOfficialToMGO(input interface{}) interface{} {
 		return result
 	case primitive.ObjectID:
 		return bson.ObjectId(v[:])
+	case []byte:
+		// Handle byte arrays that might be ObjectIDs
+		if len(v) == 12 {
+			return bson.ObjectId(v)
+		}
+		return v
 	case primitive.DateTime:
 		// Convert primitive.DateTime to time.Time
 		return v.Time()
