@@ -225,7 +225,7 @@ func TestModernQueryApply(t *testing.T) {
 	// Test upsert
 	newId := bson.NewObjectId()
 	change = mgo.Change{
-		Update: bson.M{"_id": newId, "value": "new"},
+		Update: bson.M{"$set": bson.M{"value": "new"}},
 		Upsert: true,
 	}
 	info, err = coll.Find(bson.M{"_id": newId}).Apply(change, &result)

@@ -158,10 +158,12 @@ func (b *ModernBulk) convertBulkResult(result *mongodrv.BulkWriteResult) *BulkRe
 		return &BulkResult{}
 	}
 
-	// For delete operations, DeletedCount represents both matched and modified
-	// For update operations, use MatchedCount and ModifiedCount
-	matched := int(result.MatchedCount + result.DeletedCount)
-	modified := int(result.ModifiedCount + result.DeletedCount + result.UpsertedCount)
+	// In MongoDB bulk operations:
+	// - Matched: only counts documents matched by update operations (not inserts/deletes)
+	// - Modified: only counts documents actually modified by update operations
+	// - Upserts that insert new documents are NOT counted as modified
+	matched := int(result.MatchedCount)
+	modified := int(result.ModifiedCount)
 
 	return &BulkResult{
 		Matched:  matched,

@@ -334,8 +334,9 @@ func TestModernCollectionBulk(t *testing.T) {
 
 	// Verify results
 	// Note: BulkResult only has Matched and Modified fields
-	if result.Matched < 3 {
-		t.Errorf("Expected at least 3 matched operations, got %d", result.Matched)
+	// Matched only counts documents matched by update operations
+	if result.Matched != 1 {
+		t.Errorf("Expected 1 matched operation (from update), got %d", result.Matched)
 	}
 	if result.Modified != 1 {
 		t.Errorf("Expected 1 update, got %d", result.Modified)

@@ -178,30 +178,73 @@ func (q *ModernQ) Apply(change Change, result interface{}) (*ChangeInfo, error) 
 		updateOpts.SetReturnDocument(options.Before)
 	}
 
+	// Track whether this is an upsert that creates a new document
+	var wasUpsert bool
+
+	// First, check if the document exists (to determine if it's an upsert)
+	if change.Upsert {
+		var existingDoc officialBson.M
+		findResult := q.coll.mgoColl.FindOne(ctx, q.filter)
+		findErr := findResult.Decode(&existingDoc)
+		if findErr == mongodrv.ErrNoDocuments {
+			wasUpsert = true
+		} else if findErr != nil && findErr != mongodrv.ErrNoDocuments {
+			// Some other error occurred during the check
+			// Continue anyway, as the operation might still succeed
+		}
+	}
+
 	singleResult := q.coll.mgoColl.FindOneAndUpdate(ctx, q.filter, updateDoc, updateOpts)
+
+	// Handle the case where upsert creates a new document but ReturnDocument is Before
 	if singleResult.Err() != nil {
 		if singleResult.Err() == mongodrv.ErrNoDocuments {
-			if change.Upsert {
-				// Document was upserted but we need to return ChangeInfo
-				return &ChangeInfo{Updated: 1}, nil
+			if change.Upsert && !change.ReturnNew && wasUpsert {
+				// This is expected: upsert created a new doc but we asked for the "before" document
+				// We need to get the new document's ID
+				// Do a quick find to get the created document
+				var newDoc officialBson.M
+				findResult := q.coll.mgoColl.FindOne(ctx, q.filter)
+				if err := findResult.Decode(&newDoc); err == nil {
+					changeInfo := &ChangeInfo{}
+					if id, ok := newDoc["_id"]; ok {
+						changeInfo.UpsertedId = convertOfficialToMGO(id)
+					}
+					// If result is requested but ReturnNew is false, we can't populate it
+					// because there was no "before" document
+					return changeInfo, nil
+				}
 			}
 			return &ChangeInfo{}, ErrNotFound
 		}
 		return nil, singleResult.Err()
 	}
 
+	var doc officialBson.M
+	err := singleResult.Decode(&doc)
+	if err != nil {
+		return nil, err
+	}
+
+	converted := convertOfficialToMGO(doc)
 	if result != nil {
-		var doc officialBson.M
-		err := singleResult.Decode(&doc)
-		if err != nil {
-			return nil, err
-		}
-		converted := convertOfficialToMGO(doc)
 		err = mapStructToInterface(converted, result)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return &ChangeInfo{Updated: 1}, nil
+	changeInfo := &ChangeInfo{}
+	if wasUpsert {
+		// This was an upsert that created a new document
+		if id, ok := doc["_id"]; ok {
+			changeInfo.UpsertedId = convertOfficialToMGO(id)
+		}
+	} else {
+		// This was an update of an existing document
+		changeInfo.Updated = 1
+		changeInfo.Matched = 1
+	}
+
+	return changeInfo, nil
 }

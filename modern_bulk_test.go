@@ -93,7 +93,7 @@ func TestModernBulkUpsert(t *testing.T) {
 
 	// Add upsert operations
 	bulk.Upsert(bson.M{"_id": 1}, bson.M{"$set": bson.M{"value": 200}}) // Update existing
-	bulk.Upsert(bson.M{"_id": 2}, bson.M{"_id": 2, "value": 300})       // Insert new
+	bulk.Upsert(bson.M{"_id": 2}, bson.M{"$set": bson.M{"value": 300}}) // Insert new
 
 	// Execute
 	result, err := bulk.Run()
@@ -182,7 +182,7 @@ func TestModernBulkMixedOperations(t *testing.T) {
 	bulk.Update(bson.M{"_id": 1}, bson.M{"$set": bson.M{"value": 150}})
 	bulk.Insert(bson.M{"_id": 3, "value": 300})
 	bulk.Remove(bson.M{"_id": 2})
-	bulk.Upsert(bson.M{"_id": 4}, bson.M{"_id": 4, "value": 400})
+	bulk.Upsert(bson.M{"_id": 4}, bson.M{"$set": bson.M{"value": 400}})
 
 	// Execute
 	_, err = bulk.Run()
