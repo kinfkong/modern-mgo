@@ -220,107 +220,17 @@ func mapStructToInterface(src, dst interface{}) error {
 		dstValue := reflect.ValueOf(dst)
 		if dstValue.Kind() == reflect.Ptr && dstValue.Elem().Kind() == reflect.Struct {
 			dstType := dstValue.Elem().Type()
-			dstElem := dstValue.Elem()
 
-			// Directly set fields using reflection to avoid bson marshal/unmarshal issues
-			for i := 0; i < dstType.NumField(); i++ {
-				field := dstType.Field(i)
-				fieldValue := dstElem.Field(i)
-
-				// Get the bson field name
-				bsonTag := field.Tag.Get("bson")
-				tagParts := strings.Split(bsonTag, ",")
-				bsonFieldName := tagParts[0]
-				if bsonFieldName == "" || bsonFieldName == "-" {
-					continue
-				}
-
-				// Special handling for _id field
-				if bsonFieldName == "_id" && len(tagParts) > 1 && tagParts[1] == "omitempty" {
-					bsonFieldName = "_id"
-				}
-
-				// Get the value from the map
-				mapValue, exists := srcMap[bsonFieldName]
-				if !exists {
-					continue
-				}
-
-				// Handle time slice fields specially
-				if field.Type.Kind() == reflect.Slice && field.Type.Elem() == reflect.TypeOf(time.Time{}) {
-					// Convert primitive.A to []interface{} if needed
-					var slice []interface{}
-					switch v := mapValue.(type) {
-					case []interface{}:
-						slice = v
-					case primitive.A:
-						slice = []interface{}(v)
-					default:
-						// Try reflection as last resort
-						val := reflect.ValueOf(mapValue)
-						if val.Kind() == reflect.Slice {
-							slice = make([]interface{}, val.Len())
-							for i := 0; i < val.Len(); i++ {
-								slice[i] = val.Index(i).Interface()
-							}
-						}
-					}
-
-					if slice != nil {
-						timeSlice := reflect.MakeSlice(field.Type, 0, len(slice))
-						for _, item := range slice {
-							if timestamp, ok := item.(int64); ok {
-								timeValue := time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC()
-								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
-							} else if t, ok := item.(time.Time); ok {
-								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(t))
-							} else if dt, ok := item.(primitive.DateTime); ok {
-								// Handle primitive.DateTime
-								timeValue := dt.Time()
-								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
-							} else if timestamp, ok := item.(int32); ok {
-								// Handle int32 timestamps
-								timeValue := time.Unix(int64(timestamp)/1000, (int64(timestamp)%1000)*1000000).UTC()
-								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
-							} else if timestamp, ok := item.(float64); ok {
-								// Handle float64 timestamps (JavaScript numbers)
-								ms := int64(timestamp)
-								timeValue := time.Unix(ms/1000, (ms%1000)*1000000).UTC()
-								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
-							}
-						}
-						if fieldValue.CanSet() {
-							fieldValue.Set(timeSlice)
-						}
-						continue
-					}
-				}
-
-				// For other fields, use bson unmarshal on individual field
-				if fieldValue.CanSet() && fieldValue.CanAddr() {
-					fieldData, err := bson.Marshal(bson.M{"temp": mapValue})
-					if err == nil {
-						var temp bson.M
-						if err = bson.Unmarshal(fieldData, &temp); err == nil {
-							if tempValue, ok := temp["temp"]; ok {
-								// Use reflection to set the value
-								setValue := reflect.ValueOf(tempValue)
-								if setValue.Type().ConvertibleTo(fieldValue.Type()) {
-									fieldValue.Set(setValue.Convert(fieldValue.Type()))
-								} else if setValue.Type() == fieldValue.Type() {
-									fieldValue.Set(setValue)
-								}
-							}
-						}
-					}
-				}
+			// Create a copy and preprocess any time slice fields
+			processedMap := bson.M{}
+			for key, value := range srcMap {
+				processedMap[key] = preprocessTimeSlicesForStruct(value, key, dstType)
 			}
-
-			return nil
+			src = processedMap
 		}
 	}
 
-	// Handle single document conversion for non-struct types
+	// Handle single document conversion
 	data, err := bson.Marshal(src)
 	if err != nil {
 		return err
@@ -328,35 +238,61 @@ func mapStructToInterface(src, dst interface{}) error {
 	return bson.Unmarshal(data, dst)
 }
 
-// preprocessTimeSlicesForStruct converts []interface{} containing int64 timestamps to []time.Time
+// preprocessTimeSlicesForStruct converts []interface{} containing timestamps to []time.Time
 // only if the target struct field is expecting []time.Time
 func preprocessTimeSlicesForStruct(value interface{}, fieldName string, structType reflect.Type) interface{} {
-	if slice, ok := value.([]interface{}); ok && len(slice) > 0 {
-		// Find the field in the struct
-		field, found := findStructFieldByBSONTag(structType, fieldName)
-		if found && field.Type.Kind() == reflect.Slice && field.Type.Elem() == reflect.TypeOf(time.Time{}) {
-			// This field expects []time.Time, so try to convert int64 values
-			allInt64 := true
-			for _, item := range slice {
-				if _, ok := item.(int64); !ok {
-					allInt64 = false
-					break
-				}
-			}
+	// Find the field in the struct
+	field, found := findStructFieldByBSONTag(structType, fieldName)
+	if !found || field.Type.Kind() != reflect.Slice || field.Type.Elem() != reflect.TypeOf(time.Time{}) {
+		return value
+	}
 
-			if allInt64 {
-				// Convert int64 timestamps to time.Time values
-				timeSlice := make([]time.Time, len(slice))
-				for i, item := range slice {
-					if timestamp, ok := item.(int64); ok {
-						timeSlice[i] = time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC()
-					}
-				}
-				return timeSlice
+	// Handle different slice types
+	var slice []interface{}
+	switch v := value.(type) {
+	case []interface{}:
+		slice = v
+	case primitive.A:
+		slice = []interface{}(v)
+	default:
+		// Try reflection as last resort
+		val := reflect.ValueOf(value)
+		if val.Kind() == reflect.Slice {
+			slice = make([]interface{}, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				slice[i] = val.Index(i).Interface()
 			}
+		} else {
+			return value
 		}
 	}
-	return value
+
+	if len(slice) == 0 {
+		return value
+	}
+
+	// Convert various timestamp formats to time.Time
+	timeSlice := make([]time.Time, 0, len(slice))
+	for _, item := range slice {
+		switch v := item.(type) {
+		case int64:
+			timeSlice = append(timeSlice, time.Unix(v/1000, (v%1000)*1000000).UTC())
+		case time.Time:
+			timeSlice = append(timeSlice, v)
+		case primitive.DateTime:
+			timeSlice = append(timeSlice, v.Time())
+		case int32:
+			timeSlice = append(timeSlice, time.Unix(int64(v)/1000, (int64(v)%1000)*1000000).UTC())
+		case float64:
+			ms := int64(v)
+			timeSlice = append(timeSlice, time.Unix(ms/1000, (ms%1000)*1000000).UTC())
+		default:
+			// If we can't convert, return the original value
+			return value
+		}
+	}
+
+	return timeSlice
 }
 
 // findStructFieldByBSONTag finds a struct field by its BSON tag name
