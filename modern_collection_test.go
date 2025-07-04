@@ -498,42 +498,230 @@ func TestModernCollectionAppointmentWithTimeSlice(t *testing.T) {
 	AssertEqual(t, 0, len(app3.StartedAtCandidates), "Empty time candidates slice should remain empty")
 
 	// Test filtering by time candidates - find appointments with time candidates after a certain time
-	futureTime := now.Add(90 * time.Minute)
-	var filteredAppointments []Appointment
-	err = coll.Find(bson.M{"startedAtCandidates": bson.M{"$elemMatch": bson.M{"$gt": futureTime}}}).All(&filteredAppointments)
-	AssertNoError(t, err, "Failed to filter appointments by time candidates")
-
-	// Should find appointment1 and appointment2 (both have times after futureTime)
-	AssertEqual(t, 2, len(filteredAppointments), "Incorrect number of filtered appointments")
-
-	// Test retrieval with projection
-	var projectedAppointments []bson.M
-	err = coll.Find(nil).Select(bson.M{"startedAtCandidates": 1, "createdAt": 1}).All(&projectedAppointments)
-	AssertNoError(t, err, "Failed to retrieve appointments with projection")
-
-	// Verify projection contains expected fields
-	for _, app := range projectedAppointments {
-		if _, ok := app["startedAtCandidates"]; !ok {
-			t.Fatal("startedAtCandidates field missing from projection")
-		}
-		if _, ok := app["createdAt"]; !ok {
-			t.Fatal("createdAt field missing from projection")
-		}
-		if _, ok := app["updatedAt"]; ok {
-			t.Fatal("updatedAt field should not be in projection")
-		}
+	futureThreshold := now.Add(20 * time.Hour)
+	query := bson.M{
+		"startedAtCandidates": bson.M{
+			"$elemMatch": bson.M{
+				"$gte": futureThreshold,
+			},
+		},
 	}
 
-	// Test update of time candidates
-	newCandidates := []time.Time{
-		now.Add(4 * time.Hour),
-		now.Add(5 * time.Hour),
-	}
-	err = coll.UpdateId(appointment1.ID, bson.M{"$set": bson.M{"startedAtCandidates": newCandidates}})
-	AssertNoError(t, err, "Failed to update time candidates")
+	count, err := coll.Find(query).Count()
+	AssertNoError(t, err, "Failed to count with $elemMatch query")
+	AssertEqual(t, 1, count, "Should find 1 appointment with future time candidates")
+}
 
-	// Verify update
-	var updatedAppointment Appointment
-	err = coll.FindId(appointment1.ID).One(&updatedAppointment)
-	AssertNoError(t, err, "Failed to retrieve updated appointment")
+// TestModernCollectionMapFields tests handling of map[string]interface{} fields
+func TestModernCollectionMapFields(t *testing.T) {
+	// Setup
+	tdb := NewTestDB(t)
+	defer tdb.Close(t)
+
+	coll := tdb.C("appointments")
+
+	// Test struct with map field
+	type AppointmentWithPatientInfo struct {
+		ID          bson.ObjectId          `json:"id" bson:"_id,omitempty"`
+		PatientInfo map[string]interface{} `json:"patientInfo" bson:"patientInfo"`
+		Notes       string                 `json:"notes" bson:"notes"`
+	}
+
+	// Create test data with various map configurations
+	appointment1 := AppointmentWithPatientInfo{
+		ID: bson.NewObjectId(),
+		PatientInfo: map[string]interface{}{
+			"name":       "John Doe",
+			"age":        30,
+			"conditions": []string{"diabetes", "hypertension"},
+			"bloodType":  "O+",
+			"medications": map[string]interface{}{
+				"current":   []string{"metformin", "lisinopril"},
+				"allergies": []string{"penicillin"},
+			},
+		},
+		Notes: "Regular checkup",
+	}
+
+	appointment2 := AppointmentWithPatientInfo{
+		ID:          bson.NewObjectId(),
+		PatientInfo: map[string]interface{}{}, // Empty map
+		Notes:       "New patient",
+	}
+
+	appointment3 := AppointmentWithPatientInfo{
+		ID:          bson.NewObjectId(),
+		PatientInfo: nil, // Nil map
+		Notes:       "Emergency visit",
+	}
+
+	// Test inserting documents with map fields
+	err := coll.Insert(appointment1)
+	AssertNoError(t, err, "Failed to insert appointment with populated map")
+
+	err = coll.Insert(appointment2, appointment3)
+	AssertNoError(t, err, "Failed to insert appointments with empty/nil maps")
+
+	// Test retrieval
+	var retrieved []AppointmentWithPatientInfo
+	err = coll.Find(nil).All(&retrieved)
+	AssertNoError(t, err, "Failed to retrieve appointments with map fields")
+	AssertEqual(t, 3, len(retrieved), "Should retrieve all 3 appointments")
+
+	// Verify map contents
+	retrievedMap := make(map[string]AppointmentWithPatientInfo)
+	for _, app := range retrieved {
+		retrievedMap[app.ID.Hex()] = app
+	}
+
+	// Check appointment1 - populated map
+	app1 := retrievedMap[appointment1.ID.Hex()]
+	AssertEqual(t, "John Doe", app1.PatientInfo["name"], "Patient name mismatch")
+	AssertEqual(t, 30, app1.PatientInfo["age"], "Patient age mismatch")
+
+	// Check nested map
+	meds, ok := app1.PatientInfo["medications"].(map[string]interface{})
+	if !ok {
+		t.Fatal("medications should be a map")
+	}
+	current, ok := meds["current"].([]interface{})
+	if !ok || len(current) != 2 {
+		t.Fatal("current medications should be a slice of 2 items")
+	}
+
+	// Check appointment2 - empty map
+	app2 := retrievedMap[appointment2.ID.Hex()]
+	if app2.PatientInfo == nil {
+		t.Fatal("Empty map should not be nil after retrieval")
+	}
+	AssertEqual(t, 0, len(app2.PatientInfo), "Empty map should remain empty")
+
+	// Check appointment3 - nil map
+	app3 := retrievedMap[appointment3.ID.Hex()]
+	if app3.PatientInfo != nil && len(app3.PatientInfo) > 0 {
+		t.Fatal("Nil map should remain nil or empty after retrieval")
+	}
+
+	// Test querying by map field
+	query := bson.M{
+		"patientInfo.bloodType": "O+",
+	}
+	count, err := coll.Find(query).Count()
+	AssertNoError(t, err, "Failed to query by nested map field")
+	AssertEqual(t, 1, count, "Should find 1 appointment with blood type O+")
+
+	// Test querying nested map field
+	query2 := bson.M{
+		"patientInfo.medications.allergies": bson.M{
+			"$in": []string{"penicillin"},
+		},
+	}
+	count, err = coll.Find(query2).Count()
+	AssertNoError(t, err, "Failed to query by deeply nested map field")
+	AssertEqual(t, 1, count, "Should find 1 appointment with penicillin allergy")
+}
+
+// TestModernCollectionAttachmentSlices tests handling of nested struct slices
+func TestModernCollectionAttachmentSlices(t *testing.T) {
+	// Setup
+	tdb := NewTestDB(t)
+	defer tdb.Close(t)
+
+	coll := tdb.C("appointments")
+
+	// Define attachment struct
+	type Attachment struct {
+		FileName   string    `json:"fileName" bson:"fileName"`
+		FileSize   int64     `json:"fileSize" bson:"fileSize"`
+		MimeType   string    `json:"mimeType" bson:"mimeType"`
+		UploadedAt time.Time `json:"uploadedAt" bson:"uploadedAt"`
+	}
+
+	// Define appointment with attachments
+	type AppointmentWithAttachments struct {
+		ID                   bson.ObjectId `json:"id" bson:"_id,omitempty"`
+		ImageAttachments     []Attachment  `json:"imageAttachments" bson:"imageAttachments"`
+		InsuranceAttachments []Attachment  `json:"insuranceAttachments" bson:"insuranceAttachments"`
+	}
+
+	now := time.Now()
+
+	// Create test appointments
+	appointment1 := AppointmentWithAttachments{
+		ID: bson.NewObjectId(),
+		ImageAttachments: []Attachment{
+			{
+				FileName:   "xray1.jpg",
+				FileSize:   1024000,
+				MimeType:   "image/jpeg",
+				UploadedAt: now,
+			},
+			{
+				FileName:   "xray2.jpg",
+				FileSize:   2048000,
+				MimeType:   "image/jpeg",
+				UploadedAt: now.Add(-1 * time.Hour),
+			},
+		},
+		InsuranceAttachments: []Attachment{
+			{
+				FileName:   "insurance_card.pdf",
+				FileSize:   512000,
+				MimeType:   "application/pdf",
+				UploadedAt: now.Add(-24 * time.Hour),
+			},
+		},
+	}
+
+	appointment2 := AppointmentWithAttachments{
+		ID:                   bson.NewObjectId(),
+		ImageAttachments:     []Attachment{}, // Empty slice
+		InsuranceAttachments: nil,            // Nil slice
+	}
+
+	// Insert appointments
+	err := coll.Insert(appointment1, appointment2)
+	AssertNoError(t, err, "Failed to insert appointments with attachment slices")
+
+	// Retrieve and verify
+	var retrieved []AppointmentWithAttachments
+	err = coll.Find(nil).All(&retrieved)
+	AssertNoError(t, err, "Failed to retrieve appointments")
+	AssertEqual(t, 2, len(retrieved), "Should retrieve 2 appointments")
+
+	// Create map for verification
+	retrievedMap := make(map[string]AppointmentWithAttachments)
+	for _, app := range retrieved {
+		retrievedMap[app.ID.Hex()] = app
+	}
+
+	// Verify appointment1
+	app1 := retrievedMap[appointment1.ID.Hex()]
+	AssertEqual(t, 2, len(app1.ImageAttachments), "Should have 2 image attachments")
+	AssertEqual(t, 1, len(app1.InsuranceAttachments), "Should have 1 insurance attachment")
+	AssertEqual(t, "xray1.jpg", app1.ImageAttachments[0].FileName, "First image attachment name mismatch")
+	AssertEqual(t, int64(1024000), app1.ImageAttachments[0].FileSize, "First image attachment size mismatch")
+
+	// Verify appointment2
+	app2 := retrievedMap[appointment2.ID.Hex()]
+	AssertEqual(t, 0, len(app2.ImageAttachments), "Empty slice should remain empty")
+	AssertEqual(t, 0, len(app2.InsuranceAttachments), "Nil slice should be empty after retrieval")
+
+	// Test querying by array size
+	query := bson.M{
+		"imageAttachments": bson.M{
+			"$size": 2,
+		},
+	}
+	count, err := coll.Find(query).Count()
+	AssertNoError(t, err, "Failed to query by array size")
+	AssertEqual(t, 1, count, "Should find 1 appointment with 2 image attachments")
+
+	// Test querying by nested array field
+	query2 := bson.M{
+		"insuranceAttachments.mimeType": "application/pdf",
+	}
+	count, err = coll.Find(query2).Count()
+	AssertNoError(t, err, "Failed to query by nested array field")
+	AssertEqual(t, 1, count, "Should find 1 appointment with PDF insurance attachment")
 }

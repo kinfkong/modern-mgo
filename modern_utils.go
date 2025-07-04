@@ -220,17 +220,107 @@ func mapStructToInterface(src, dst interface{}) error {
 		dstValue := reflect.ValueOf(dst)
 		if dstValue.Kind() == reflect.Ptr && dstValue.Elem().Kind() == reflect.Struct {
 			dstType := dstValue.Elem().Type()
+			dstElem := dstValue.Elem()
 
-			// Create a copy and preprocess any time slice fields
-			processedMap := bson.M{}
-			for key, value := range srcMap {
-				processedMap[key] = preprocessTimeSlicesForStruct(value, key, dstType)
+			// Directly set fields using reflection to avoid bson marshal/unmarshal issues
+			for i := 0; i < dstType.NumField(); i++ {
+				field := dstType.Field(i)
+				fieldValue := dstElem.Field(i)
+
+				// Get the bson field name
+				bsonTag := field.Tag.Get("bson")
+				tagParts := strings.Split(bsonTag, ",")
+				bsonFieldName := tagParts[0]
+				if bsonFieldName == "" || bsonFieldName == "-" {
+					continue
+				}
+
+				// Special handling for _id field
+				if bsonFieldName == "_id" && len(tagParts) > 1 && tagParts[1] == "omitempty" {
+					bsonFieldName = "_id"
+				}
+
+				// Get the value from the map
+				mapValue, exists := srcMap[bsonFieldName]
+				if !exists {
+					continue
+				}
+
+				// Handle time slice fields specially
+				if field.Type.Kind() == reflect.Slice && field.Type.Elem() == reflect.TypeOf(time.Time{}) {
+					// Convert primitive.A to []interface{} if needed
+					var slice []interface{}
+					switch v := mapValue.(type) {
+					case []interface{}:
+						slice = v
+					case primitive.A:
+						slice = []interface{}(v)
+					default:
+						// Try reflection as last resort
+						val := reflect.ValueOf(mapValue)
+						if val.Kind() == reflect.Slice {
+							slice = make([]interface{}, val.Len())
+							for i := 0; i < val.Len(); i++ {
+								slice[i] = val.Index(i).Interface()
+							}
+						}
+					}
+
+					if slice != nil {
+						timeSlice := reflect.MakeSlice(field.Type, 0, len(slice))
+						for _, item := range slice {
+							if timestamp, ok := item.(int64); ok {
+								timeValue := time.Unix(timestamp/1000, (timestamp%1000)*1000000).UTC()
+								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
+							} else if t, ok := item.(time.Time); ok {
+								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(t))
+							} else if dt, ok := item.(primitive.DateTime); ok {
+								// Handle primitive.DateTime
+								timeValue := dt.Time()
+								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
+							} else if timestamp, ok := item.(int32); ok {
+								// Handle int32 timestamps
+								timeValue := time.Unix(int64(timestamp)/1000, (int64(timestamp)%1000)*1000000).UTC()
+								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
+							} else if timestamp, ok := item.(float64); ok {
+								// Handle float64 timestamps (JavaScript numbers)
+								ms := int64(timestamp)
+								timeValue := time.Unix(ms/1000, (ms%1000)*1000000).UTC()
+								timeSlice = reflect.Append(timeSlice, reflect.ValueOf(timeValue))
+							}
+						}
+						if fieldValue.CanSet() {
+							fieldValue.Set(timeSlice)
+						}
+						continue
+					}
+				}
+
+				// For other fields, use bson unmarshal on individual field
+				if fieldValue.CanSet() && fieldValue.CanAddr() {
+					fieldData, err := bson.Marshal(bson.M{"temp": mapValue})
+					if err == nil {
+						var temp bson.M
+						if err = bson.Unmarshal(fieldData, &temp); err == nil {
+							if tempValue, ok := temp["temp"]; ok {
+								// Use reflection to set the value
+								setValue := reflect.ValueOf(tempValue)
+								if setValue.Type().ConvertibleTo(fieldValue.Type()) {
+									fieldValue.Set(setValue.Convert(fieldValue.Type()))
+								} else if setValue.Type() == fieldValue.Type() {
+									fieldValue.Set(setValue)
+								}
+							}
+						}
+					}
+				}
 			}
-			src = processedMap
+
+			return nil
 		}
 	}
 
-	// Handle single document conversion
+	// Handle single document conversion for non-struct types
 	data, err := bson.Marshal(src)
 	if err != nil {
 		return err

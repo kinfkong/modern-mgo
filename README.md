@@ -110,12 +110,13 @@ modern-mgo/
 #### Test Files
 
 - `modern_session_test.go` - Session management and database operations
-- `modern_collection_test.go` - CRUD operations, bulk operations, indexes
-- `modern_query_test.go` - Query operations, sorting, filtering
+- `modern_collection_test.go` - CRUD operations, bulk operations, indexes, complex data types
+- `modern_query_test.go` - Query operations, sorting, filtering, complex queries
 - `modern_iterator_test.go` - Cursor iteration and result handling
 - `modern_aggregation_test.go` - Aggregation pipeline operations
 - `modern_bulk_test.go` - Bulk write operations
 - `modern_gridfs_test.go` - GridFS file storage operations
+- `bson_objectid_test.go` - BSON ObjectId operations and conversions
 
 ### Test Coverage
 
@@ -126,10 +127,16 @@ The test suite covers the main functionality of the mgo-compatible API:
 - Database operations
 - Collection CRUD operations (Insert, Find, Update, Remove)
 - Query operations (Sort, Limit, Skip, Select, Count)
+- Complex queries ($or, $and, $not, $ne, $in, $all, $elemMatch)
+- Time-based filtering ($gte, $lt, $lte, $eq with dates)
+- Pagination with Skip and Limit
 - Aggregation pipelines
 - Bulk operations
 - GridFS file operations
 - Index management
+- BSON ObjectId operations (ObjectIdHex, IsObjectIdHex)
+- Complex data types (time slices, nested structs, map[string]interface{})
+- Nil handling for pointers and slices
 
 ❌ **Not Implemented** (from original mgo):
 - Session: `SetSyncTimeout`, `Refresh`, `DatabaseNames`, `FindRef`, `SetSafe`
