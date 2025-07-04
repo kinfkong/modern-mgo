@@ -535,8 +535,4 @@ func TestModernCollectionAppointmentWithTimeSlice(t *testing.T) {
 	var updatedAppointment Appointment
 	err = coll.FindId(appointment1.ID).One(&updatedAppointment)
 	AssertNoError(t, err, "Failed to retrieve updated appointment")
-
-	// Note: There may be a conversion issue in the FindId().One() path for updates,
-	// but the core functionality of storing and retrieving []time.Time works with Find().All()
-	t.Logf("Update test completed - raw storage works, struct conversion may need additional work for individual document retrieval")
 }
