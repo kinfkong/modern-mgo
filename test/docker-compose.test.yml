@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  mongodb-test:
+    image: mongo:4.4  # Compatible with mgo driver
+    container_name: modern-mgo-test-db
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_DATABASE: modern_mgo_test
+    volumes:
+      - mongodb_test_data:/data/db
+    command: mongod --bind_ip_all
+    networks:
+      - test-network
+
+  # Optional: MongoDB Express for database inspection during development
+  mongo-express:
+    image: mongo-express:latest
+    container_name: modern-mgo-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb-test:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin
+    depends_on:
+      - mongodb-test
+    networks:
+      - test-network
+
+volumes:
+  mongodb_test_data:
+
+networks:
+  test-network:
+    driver: bridge 
