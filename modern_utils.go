@@ -73,6 +73,20 @@ func convertMGOToOfficial(input interface{}) interface{} {
 			}
 		}
 		return result
+	case []time.Time:
+		// Handle slice of time.Time
+		result := make([]interface{}, len(v))
+		for i, t := range v {
+			result[i] = primitive.NewDateTimeFromTime(t)
+		}
+		return result
+	case []map[string]interface{}:
+		// Handle slice of maps (common in removedData)
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			result[i] = convertMGOToOfficial(item)
+		}
+		return result
 	case map[string]interface{}:
 		result := officialBson.M{}
 		for key, value := range v {
@@ -90,21 +104,24 @@ func convertMGOToOfficial(input interface{}) interface{} {
 		// Convert time.Time to primitive.DateTime
 		return primitive.NewDateTimeFromTime(v)
 	default:
-		// Check if it's a slice of bson.M using reflection
+		// Check if it's a slice using reflection to handle any slice type
 		if val.Kind() == reflect.Slice {
-			elemType := val.Type().Elem()
-			if elemType == reflect.TypeOf(bson.M{}) {
-				// Handle slice of bson.M
-				result := make([]interface{}, val.Len())
-				for i := 0; i < val.Len(); i++ {
-					result[i] = convertMGOToOfficial(val.Index(i).Interface())
-				}
-				return result
+			// Handle any type of slice generically
+			result := make([]interface{}, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				result[i] = convertMGOToOfficial(val.Index(i).Interface())
 			}
+			return result
 		}
 
 		// Handle structs by marshaling/unmarshaling with bson tags
 		if val.Kind() == reflect.Struct || (val.Kind() == reflect.Ptr && val.Elem().Kind() == reflect.Struct) {
+			// Skip converting structs that are already official BSON types
+			typeName := val.Type().String()
+			if strings.HasPrefix(typeName, "primitive.") {
+				return input
+			}
+
 			// Marshal to bson, then unmarshal to map to respect bson tags
 			data, err := bson.Marshal(input)
 			if err != nil {

@@ -1126,3 +1126,194 @@ func TestModernCollectionInsertDeleteAccountEdgeCases(t *testing.T) {
 	AssertEqual(t, 0, firstDevice["index"], "First device index mismatch")
 	AssertEqual(t, true, firstDevice["active"], "First device active mismatch")
 }
+
+// TestModernCollectionInsertDeleteAccountTimeHandling specifically tests time.Time handling in Insert
+// This test reproduces the exact error scenario reported: "Badly formed input data"
+func TestModernCollectionInsertDeleteAccountTimeHandling(t *testing.T) {
+	// Setup
+	tdb := NewTestDB(t)
+	defer tdb.Close(t)
+
+	coll := tdb.C("elife_removed_account_data")
+
+	// Create exact structure that causes the error
+	userID := bson.NewObjectId()
+	now := time.Now()
+
+	// Test case 1: Basic insert with time.Now() directly in bson.M
+	doc1 := bson.M{
+		"userId":      userID,
+		"removedData": make(map[string]interface{}),
+		"createdAt":   time.Now(), // Direct time.Now() call
+		"extraInfo":   nil,
+	}
+
+	err := coll.Insert(doc1)
+	AssertNoError(t, err, "Failed to insert document with direct time.Now()")
+
+	// Test case 2: Complex removedData with time fields at various levels
+	removedData := make(map[string]interface{})
+
+	// Simulate real collection data with various time formats
+	removedData["elife_accounts"] = []interface{}{
+		map[string]interface{}{
+			"_id":       bson.NewObjectId(),
+			"userId":    userID,
+			"createdAt": now,
+			"updatedAt": now.Add(-24 * time.Hour),
+			"lastLogin": now.Add(-1 * time.Hour),
+		},
+	}
+
+	removedData["elife_sessions"] = []interface{}{
+		map[string]interface{}{
+			"_id":       bson.NewObjectId(),
+			"userId":    userID,
+			"startTime": now.Add(-2 * time.Hour),
+			"endTime":   now.Add(-1 * time.Hour),
+			"duration":  3600, // seconds
+		},
+	}
+
+	// Test with nested time values in different formats
+	removedData["elife_activities"] = []interface{}{
+		map[string]interface{}{
+			"_id":    bson.NewObjectId(),
+			"userId": userID,
+			"timestamps": map[string]interface{}{
+				"created":  now,
+				"modified": now.Add(-30 * time.Minute),
+				"accessed": []time.Time{
+					now.Add(-3 * time.Hour),
+					now.Add(-2 * time.Hour),
+					now.Add(-1 * time.Hour),
+				},
+			},
+		},
+	}
+
+	extraInfo := map[string]interface{}{
+		"deletionTime": now,
+		"metadata": map[string]interface{}{
+			"processedAt": now,
+			"version":     "1.0",
+		},
+	}
+
+	doc2 := bson.M{
+		"userId":      userID,
+		"removedData": removedData,
+		"createdAt":   now,
+		"extraInfo":   extraInfo,
+	}
+
+	err = coll.Insert(doc2)
+	AssertNoError(t, err, "Failed to insert document with complex time fields")
+
+	// Test case 3: Edge case with nil time pointers and zero times
+	var nilTime *time.Time
+	zeroTime := time.Time{}
+
+	removedData3 := make(map[string]interface{})
+	removedData3["elife_edge_cases"] = []interface{}{
+		map[string]interface{}{
+			"_id":         bson.NewObjectId(),
+			"userId":      userID,
+			"nilTime":     nilTime,
+			"zeroTime":    zeroTime,
+			"validTime":   now,
+			"timePointer": &now,
+		},
+	}
+
+	doc3 := bson.M{
+		"userId":      userID,
+		"removedData": removedData3,
+		"createdAt":   now,
+		"extraInfo":   nil,
+	}
+
+	err = coll.Insert(doc3)
+	AssertNoError(t, err, "Failed to insert document with nil/zero time values")
+
+	// Test case 4: Mixed types in arrays (similar to real-world scenarios)
+	removedData4 := make(map[string]interface{})
+
+	// Mix of different data types including times
+	mixedArray := []interface{}{
+		map[string]interface{}{
+			"type":      "event",
+			"timestamp": now,
+			"data":      "some data",
+		},
+		map[string]interface{}{
+			"type":  "metric",
+			"value": 123.45,
+			"time":  now.Unix(), // Unix timestamp
+		},
+		map[string]interface{}{
+			"type":     "status",
+			"active":   true,
+			"since":    now,
+			"duration": 3600.0, // float seconds
+		},
+	}
+
+	removedData4["elife_mixed_data"] = mixedArray
+
+	doc4 := bson.M{
+		"userId":      bson.NewObjectId(), // New user for this test
+		"removedData": removedData4,
+		"createdAt":   time.Now(), // Fresh time.Now() call
+		"extraInfo": map[string]interface{}{
+			"processedAt": time.Now().UTC(), // UTC time
+			"timezone":    "UTC",
+		},
+	}
+
+	err = coll.Insert(doc4)
+	AssertNoError(t, err, "Failed to insert document with mixed data types")
+
+	// Verify all documents were inserted
+	count, err := coll.Count()
+	AssertNoError(t, err, "Failed to count documents")
+	AssertEqual(t, 4, count, "Should have 4 documents")
+
+	// Verify we can retrieve and the times are properly handled
+	var retrieved []bson.M
+	err = coll.Find(nil).All(&retrieved)
+	AssertNoError(t, err, "Failed to retrieve all documents")
+
+	// Check that createdAt fields are properly stored as times
+	for i, doc := range retrieved {
+		createdAt, exists := doc["createdAt"]
+		if !exists {
+			t.Fatalf("Document %d missing createdAt field", i)
+		}
+
+		// The retrieved time might be primitive.DateTime or time.Time
+		switch v := createdAt.(type) {
+		case time.Time:
+			// Good, it's already a time.Time
+		case int64:
+			// Might be a timestamp, convert it
+			if v < 0 {
+				t.Fatalf("Document %d has invalid timestamp: %v", i, v)
+			}
+		default:
+			t.Logf("Document %d createdAt type: %T", i, createdAt)
+			// Not failing here as MongoDB might return different types
+		}
+	}
+
+	// Test specific query with time range to ensure times are queryable
+	recentCount, err := coll.Find(bson.M{
+		"createdAt": bson.M{
+			"$gte": now.Add(-1 * time.Hour),
+		},
+	}).Count()
+	AssertNoError(t, err, "Failed to query by time range")
+	if recentCount == 0 {
+		t.Error("Should find at least one recent document")
+	}
+}
