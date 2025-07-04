@@ -1,6 +1,7 @@
 package mgo_test
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -724,4 +725,404 @@ func TestModernCollectionAttachmentSlices(t *testing.T) {
 	count, err = coll.Find(query2).Count()
 	AssertNoError(t, err, "Failed to query by nested array field")
 	AssertEqual(t, 1, count, "Should find 1 appointment with PDF insurance attachment")
+}
+
+// TestModernCollectionInsertComplexNestedStructure tests inserting a complex nested structure
+// similar to what the deleteAccount method does with removed account data
+func TestModernCollectionInsertComplexNestedStructure(t *testing.T) {
+	// Setup
+	tdb := NewTestDB(t)
+	defer tdb.Close(t)
+
+	coll := tdb.C("elife_removed_account_data")
+
+	// Create a complex nested structure similar to deleteAccount's removedData
+	userID := bson.NewObjectId()
+	now := time.Now()
+
+	// Create sample removed data that mimics real collections
+	removedData := make(map[string]interface{})
+
+	// Sample data for elife_devices collection
+	removedData["elife_devices"] = []map[string]interface{}{
+		{
+			"_id":       bson.NewObjectId(),
+			"userId":    userID,
+			"deviceId":  "device1",
+			"type":      "smartphone",
+			"active":    true,
+			"createdAt": now.Add(-24 * time.Hour),
+		},
+		{
+			"_id":       bson.NewObjectId(),
+			"userId":    userID,
+			"deviceId":  "device2",
+			"type":      "tablet",
+			"active":    false,
+			"createdAt": now.Add(-48 * time.Hour),
+		},
+	}
+
+	// Sample data for elife_families collection
+	removedData["elife_families"] = []map[string]interface{}{
+		{
+			"_id":      bson.NewObjectId(),
+			"userId":   userID,
+			"familyId": bson.NewObjectId(),
+			"role":     "parent",
+			"joinedAt": now.Add(-72 * time.Hour),
+			"settings": map[string]interface{}{"notifications": true, "privacy": "strict"},
+		},
+	}
+
+	// Sample data for elife_accounts collection
+	removedData["elife_accounts"] = []map[string]interface{}{
+		{
+			"_id":       userID,
+			"email":     "user@example.com",
+			"name":      "Test User",
+			"active":    true,
+			"createdAt": now.Add(-168 * time.Hour), // 1 week ago
+			"profile": map[string]interface{}{
+				"age":         30,
+				"city":        "New York",
+				"preferences": []string{"privacy", "security"},
+			},
+		},
+	}
+
+	// Extra info with additional metadata
+	extraInfo := map[string]interface{}{
+		"deletionReason": "user_request",
+		"requestedBy":    userID,
+		"adminNotes":     "Standard account deletion",
+		"backupCreated":  true,
+		"retentionDays":  30,
+		"metadata": map[string]interface{}{
+			"version": "1.0",
+			"source":  "web_app",
+			"browser": "chrome",
+		},
+	}
+
+	// Create the document structure that deleteAccount method would insert
+	documentToInsert := bson.M{
+		"userId":      userID,
+		"removedData": removedData,
+		"createdAt":   now,
+		"extraInfo":   extraInfo,
+	}
+
+	// Test the Insert operation
+	err := coll.Insert(documentToInsert)
+	AssertNoError(t, err, "Failed to insert complex nested structure")
+
+	// Verify the document was inserted correctly
+	var retrievedDoc bson.M
+	err = coll.Find(bson.M{"userId": userID}).One(&retrievedDoc)
+	AssertNoError(t, err, "Failed to retrieve inserted document")
+
+	// Verify basic fields
+	retrievedMainUserID, ok := retrievedDoc["userId"].(bson.ObjectId)
+	if !ok {
+		if idStr, ok := retrievedDoc["userId"].(string); ok {
+			retrievedMainUserID = bson.ObjectId(idStr)
+		} else {
+			t.Fatalf("Expected main userId to be bson.ObjectId or string, got %T", retrievedDoc["userId"])
+		}
+	}
+	AssertEqual(t, userID.Hex(), retrievedMainUserID.Hex(), "UserId mismatch")
+	if retrievedDoc["removedData"] == nil {
+		t.Fatal("RemovedData should not be nil")
+	}
+	if retrievedDoc["extraInfo"] == nil {
+		t.Fatal("ExtraInfo should not be nil")
+	}
+
+	// Verify removedData structure
+	retrievedRemovedData, ok := retrievedDoc["removedData"].(bson.M)
+	if !ok {
+		t.Fatalf("RemovedData should be bson.M, got %T", retrievedDoc["removedData"])
+	}
+
+	// Verify elife_devices collection data
+	devicesData, ok := retrievedRemovedData["elife_devices"].([]interface{})
+	if !ok {
+		t.Fatal("elife_devices should be []interface{}")
+	}
+	AssertEqual(t, 2, len(devicesData), "Should have 2 devices")
+
+	// Verify first device
+	device1, ok := devicesData[0].(bson.M)
+	if !ok {
+		t.Fatal("First device should be bson.M")
+	}
+	// Convert the retrieved userId to bson.ObjectId for comparison
+	retrievedUserID, ok := device1["userId"].(bson.ObjectId)
+	if !ok {
+		// If it's not already a bson.ObjectId, it might be a string - convert it
+		if userIDStr, ok := device1["userId"].(string); ok {
+			retrievedUserID = bson.ObjectId(userIDStr)
+		} else {
+			t.Fatalf("Expected userId to be bson.ObjectId or string, got %T", device1["userId"])
+		}
+	}
+	AssertEqual(t, userID.Hex(), retrievedUserID.Hex(), "Device userId mismatch")
+	AssertEqual(t, "device1", device1["deviceId"], "Device deviceId mismatch")
+	AssertEqual(t, "smartphone", device1["type"], "Device type mismatch")
+	AssertEqual(t, true, device1["active"], "Device active mismatch")
+
+	// Verify elife_families collection data
+	familiesData, ok := retrievedRemovedData["elife_families"].([]interface{})
+	if !ok {
+		t.Fatal("elife_families should be []interface{}")
+	}
+	AssertEqual(t, 1, len(familiesData), "Should have 1 family")
+
+	// Verify family data
+	family1, ok := familiesData[0].(bson.M)
+	if !ok {
+		t.Fatal("Family should be bson.M")
+	}
+	// Convert the retrieved userId to bson.ObjectId for comparison
+	retrievedFamilyUserID, ok := family1["userId"].(bson.ObjectId)
+	if !ok {
+		if userIDStr, ok := family1["userId"].(string); ok {
+			retrievedFamilyUserID = bson.ObjectId(userIDStr)
+		} else {
+			t.Fatalf("Expected family userId to be bson.ObjectId or string, got %T", family1["userId"])
+		}
+	}
+	AssertEqual(t, userID.Hex(), retrievedFamilyUserID.Hex(), "Family userId mismatch")
+	AssertEqual(t, "parent", family1["role"], "Family role mismatch")
+
+	// Verify nested settings in family
+	familySettings, ok := family1["settings"].(bson.M)
+	if !ok {
+		t.Fatal("Family settings should be bson.M")
+	}
+	AssertEqual(t, true, familySettings["notifications"], "Family notifications setting mismatch")
+	AssertEqual(t, "strict", familySettings["privacy"], "Family privacy setting mismatch")
+
+	// Verify elife_accounts collection data
+	accountsData, ok := retrievedRemovedData["elife_accounts"].([]interface{})
+	if !ok {
+		t.Fatal("elife_accounts should be []interface{}")
+	}
+	AssertEqual(t, 1, len(accountsData), "Should have 1 account")
+
+	// Verify account data
+	account1, ok := accountsData[0].(bson.M)
+	if !ok {
+		t.Fatal("Account should be bson.M")
+	}
+	// Convert the retrieved _id to bson.ObjectId for comparison
+	retrievedAccountID, ok := account1["_id"].(bson.ObjectId)
+	if !ok {
+		if idStr, ok := account1["_id"].(string); ok {
+			retrievedAccountID = bson.ObjectId(idStr)
+		} else {
+			t.Fatalf("Expected account _id to be bson.ObjectId or string, got %T", account1["_id"])
+		}
+	}
+	AssertEqual(t, userID.Hex(), retrievedAccountID.Hex(), "Account _id mismatch")
+	AssertEqual(t, "user@example.com", account1["email"], "Account email mismatch")
+
+	// Verify nested profile in account
+	accountProfile, ok := account1["profile"].(bson.M)
+	if !ok {
+		t.Fatal("Account profile should be bson.M")
+	}
+	AssertEqual(t, 30, accountProfile["age"], "Account age mismatch")
+	AssertEqual(t, "New York", accountProfile["city"], "Account city mismatch")
+
+	// Verify array in profile
+	preferences, ok := accountProfile["preferences"].([]interface{})
+	if !ok {
+		t.Fatal("Account preferences should be []interface{}")
+	}
+	AssertEqual(t, 2, len(preferences), "Should have 2 preferences")
+	AssertEqual(t, "privacy", preferences[0], "First preference mismatch")
+	AssertEqual(t, "security", preferences[1], "Second preference mismatch")
+
+	// Verify extraInfo structure
+	retrievedExtraInfo, ok := retrievedDoc["extraInfo"].(bson.M)
+	if !ok {
+		t.Fatal("ExtraInfo should be bson.M")
+	}
+	AssertEqual(t, "user_request", retrievedExtraInfo["deletionReason"], "DeletionReason mismatch")
+	// Convert the retrieved requestedBy to bson.ObjectId for comparison
+	retrievedRequestedBy, ok := retrievedExtraInfo["requestedBy"].(bson.ObjectId)
+	if !ok {
+		if idStr, ok := retrievedExtraInfo["requestedBy"].(string); ok {
+			retrievedRequestedBy = bson.ObjectId(idStr)
+		} else {
+			t.Fatalf("Expected requestedBy to be bson.ObjectId or string, got %T", retrievedExtraInfo["requestedBy"])
+		}
+	}
+	AssertEqual(t, userID.Hex(), retrievedRequestedBy.Hex(), "RequestedBy mismatch")
+	AssertEqual(t, true, retrievedExtraInfo["backupCreated"], "BackupCreated mismatch")
+	AssertEqual(t, 30, retrievedExtraInfo["retentionDays"], "RetentionDays mismatch")
+
+	// Verify nested metadata in extraInfo
+	extraMetadata, ok := retrievedExtraInfo["metadata"].(bson.M)
+	if !ok {
+		t.Fatal("ExtraInfo metadata should be bson.M")
+	}
+	AssertEqual(t, "1.0", extraMetadata["version"], "Metadata version mismatch")
+	AssertEqual(t, "web_app", extraMetadata["source"], "Metadata source mismatch")
+	AssertEqual(t, "chrome", extraMetadata["browser"], "Metadata browser mismatch")
+
+	// Test that we can query the document using nested fields
+	count, err := coll.Find(bson.M{"extraInfo.deletionReason": "user_request"}).Count()
+	AssertNoError(t, err, "Failed to count with nested field query")
+	AssertEqual(t, 1, count, "Should find 1 document with nested field query")
+
+	// Test finding with time range
+	timeRangeCount, err := coll.Find(bson.M{
+		"createdAt": bson.M{
+			"$gte": now.Add(-1 * time.Hour),
+			"$lte": now.Add(1 * time.Hour),
+		},
+	}).Count()
+	AssertNoError(t, err, "Failed to count with time range query")
+	AssertEqual(t, 1, timeRangeCount, "Should find 1 document in time range")
+}
+
+// TestModernCollectionInsertDeleteAccountEdgeCases tests Insert method with edge cases
+// from the deleteAccount implementation
+func TestModernCollectionInsertDeleteAccountEdgeCases(t *testing.T) {
+	// Setup
+	tdb := NewTestDB(t)
+	defer tdb.Close(t)
+
+	coll := tdb.C("elife_removed_account_data")
+
+	// Test case 1: Empty removedData
+	userID1 := bson.NewObjectId()
+	doc1 := bson.M{
+		"userId":      userID1,
+		"removedData": make(map[string]interface{}),
+		"createdAt":   time.Now(),
+		"extraInfo":   nil,
+	}
+	err := coll.Insert(doc1)
+	AssertNoError(t, err, "Failed to insert document with empty removedData")
+
+	// Test case 2: Nil values in collections
+	userID2 := bson.NewObjectId()
+	removedData2 := make(map[string]interface{})
+	removedData2["elife_devices"] = []map[string]interface{}{
+		{
+			"_id":       bson.NewObjectId(),
+			"userId":    userID2,
+			"deviceId":  nil,
+			"type":      "smartphone",
+			"active":    nil,
+			"createdAt": nil,
+		},
+	}
+
+	doc2 := bson.M{
+		"userId":      userID2,
+		"removedData": removedData2,
+		"createdAt":   time.Now(),
+		"extraInfo":   map[string]interface{}{"reason": nil},
+	}
+	err = coll.Insert(doc2)
+	AssertNoError(t, err, "Failed to insert document with nil values")
+
+	// Test case 3: Very deeply nested structure
+	userID3 := bson.NewObjectId()
+	removedData3 := make(map[string]interface{})
+	removedData3["elife_complex"] = []map[string]interface{}{
+		{
+			"_id": bson.NewObjectId(),
+			"level1": map[string]interface{}{
+				"level2": map[string]interface{}{
+					"level3": map[string]interface{}{
+						"userId":    userID3,
+						"timestamp": time.Now(),
+						"values":    []interface{}{1, 2, 3, "test"},
+					},
+				},
+			},
+		},
+	}
+
+	doc3 := bson.M{
+		"userId":      userID3,
+		"removedData": removedData3,
+		"createdAt":   time.Now(),
+		"extraInfo":   map[string]interface{}{"nested": map[string]interface{}{"deep": true}},
+	}
+	err = coll.Insert(doc3)
+	AssertNoError(t, err, "Failed to insert document with deep nesting")
+
+	// Test case 4: Large array of documents
+	userID4 := bson.NewObjectId()
+	removedData4 := make(map[string]interface{})
+	deviceList := make([]map[string]interface{}, 100)
+	for i := 0; i < 100; i++ {
+		deviceList[i] = map[string]interface{}{
+			"_id":      bson.NewObjectId(),
+			"userId":   userID4,
+			"deviceId": "device" + strconv.Itoa(i),
+			"index":    i,
+			"active":   i%2 == 0,
+		}
+	}
+	removedData4["elife_devices"] = deviceList
+
+	doc4 := bson.M{
+		"userId":      userID4,
+		"removedData": removedData4,
+		"createdAt":   time.Now(),
+		"extraInfo":   map[string]interface{}{"totalDevices": 100},
+	}
+	err = coll.Insert(doc4)
+	AssertNoError(t, err, "Failed to insert document with large array")
+
+	// Verify all documents were inserted correctly
+	count, err := coll.Count()
+	AssertNoError(t, err, "Failed to count documents")
+	AssertEqual(t, 4, count, "Should have 4 documents")
+
+	// Test querying with different patterns
+	// Query by userId
+	userCount, err := coll.Find(bson.M{"userId": userID1}).Count()
+	AssertNoError(t, err, "Failed to query by userId")
+	AssertEqual(t, 1, userCount, "Should find 1 document for userID1")
+
+	// Query by nested field
+	nestedCount, err := coll.Find(bson.M{"extraInfo.nested.deep": true}).Count()
+	AssertNoError(t, err, "Failed to query by nested field")
+	AssertEqual(t, 1, nestedCount, "Should find 1 document with nested field")
+
+	// Query by array size
+	var result bson.M
+	err = coll.Find(bson.M{"extraInfo.totalDevices": 100}).One(&result)
+	AssertNoError(t, err, "Failed to query by array size indicator")
+
+	// Verify that the large array was stored and retrieved correctly
+	retrievedRemovedData, ok := result["removedData"].(bson.M)
+	if !ok {
+		t.Fatal("RemovedData should be bson.M")
+	}
+
+	retrievedDevices, ok := retrievedRemovedData["elife_devices"].([]interface{})
+	if !ok {
+		t.Fatal("elife_devices should be []interface{}")
+	}
+
+	AssertEqual(t, 100, len(retrievedDevices), "Should have 100 devices in the large array")
+
+	// Verify some devices in the array
+	firstDevice, ok := retrievedDevices[0].(bson.M)
+	if !ok {
+		t.Fatal("First device should be bson.M")
+	}
+	AssertEqual(t, "device0", firstDevice["deviceId"], "First device deviceId mismatch")
+	AssertEqual(t, 0, firstDevice["index"], "First device index mismatch")
+	AssertEqual(t, true, firstDevice["active"], "First device active mismatch")
 }
